@@ -1,3 +1,5 @@
+See `demo.mov` for example of how to run the application (instructions below).
+
 The repository contains two applications:
 * img_provider_cpp is a C++ application that reads images from the file and sends them to image processor over the shared memory.
 * processor_rust is the image processor that processes the image and writes the result (most common colour) to the shared memory.
