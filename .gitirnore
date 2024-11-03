@@ -1,1 +1,6 @@
-processor_rust/target/**
+.DS_Store
+.vscode/
+img_provider_cpp/.DS_Store
+img_provider_cpp/build/
+processor_rust/Cargo.lock
+processor_rust/target

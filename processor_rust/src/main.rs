@@ -10,8 +10,9 @@ use std::{ptr, thread, time};
 const STORAGE_ID: *const c_char = b"/SHM_IMG_PROCESSOR\0".as_ptr() as *const c_char;
 const STORAGE_SIZE: size_t = 100000; // 100kb
 
-// first addresses reserved for metadata
-const IMG_SHIFT: usize = 2;
+// first 2 addresses reserved for metadata, followed by image rows and cols
+const IMG_METADATA_SHIFT: usize = 2;
+const IMG_SHIFT: usize = 4;
 
 // shared metadata for synchronization
 const INPUT: usize = 0;
@@ -45,8 +46,18 @@ fn most_popular_colour(
         .map(|(colour, _)| colour)
 }
 
-fn calculate_colours(sh_addr: *mut c_char, rows: usize, columns: usize, answer_addr: usize) {
-    let mut i = 0;
+fn calculate_colours(sh_addr: *mut c_char) {
+    // read image dimensions
+    let (rows, columns) = unsafe {
+        let rows = *sh_addr.add(IMG_METADATA_SHIFT) as u8;
+        let columns = *sh_addr.add(IMG_METADATA_SHIFT + 1) as u8;
+        (rows as usize, columns  as usize)
+    };
+
+    // put asnswer after the metadata and image data
+    let answer_addr: usize = IMG_SHIFT + 3 * rows * columns;
+
+    let mut i: usize = 0;
     while i < rows {
         let colour = most_popular_colour(sh_addr, IMG_SHIFT + i * columns * 3, columns).unwrap(); // panic on error as we don't expect err here
 
@@ -96,9 +107,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // * if processor sees 1 0, it reads input data, sets to 0 0, calculates output, sets to 0 1.
     // * if processor sees 1 1, no more data expected, processor sets data to 0 0 and ends the process.
 
-    let rows = 100;
-    let columns = 200;
-    let answer_addr = IMG_SHIFT + 3 * rows * columns;
+
 
     unsafe {
         // set initial state to 0 1 (as no one requested input, no one reads it)
@@ -110,17 +119,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         thread::sleep(time::Duration::from_nanos(100));
 
         unsafe {
-            if *sh_addr == READY && *sh_addr.add(1) == REQUIRED {
+            if *sh_addr.add(INPUT) == READY && *sh_addr.add(OUTPUT) == REQUIRED {
                 // wait for 1 0 to start processing
                 *sh_addr = REQUIRED; // set 0 0
 
                 // process image
-                calculate_colours(sh_addr, rows, columns, answer_addr);
+                calculate_colours(sh_addr);
 
-                *sh_addr.add(1) = READY;
+                *sh_addr.add(OUTPUT) = READY;
             }
 
-            if *sh_addr == READY && *sh_addr.add(1) == READY {
+            if *sh_addr.add(INPUT) == READY && *sh_addr.add(OUTPUT) == READY {
                 // 1 1 - terminate process
                 break;
             }

@@ -20,24 +20,29 @@ bool read_ppm_to_shared_memory(const std::string& filename, char* shared_arr, in
         return false;
     }
 
-    int w, h;
-    ifs >> w;
-    ifs >> h;
+    // write rows and columns number to share memory
+    int rows, columns;
+    ifs >> columns;
+    ifs >> rows;
+
+    shared_arr[shift] = char(rows);
+    shared_arr[shift + 1] = char(columns);
 
     // maxColour is unused.
     int maxColour;
     ifs >> maxColour;
     
 
-    // Put the image into the shared mamory.
-    for (int i = 0; i < w * h; ++i) {
+    // Put the image into the shared memory.
+    int img_shift = shift + 2;
+    for (int i = 0; i < rows * columns; ++i) {
         int r, g, b;
         ifs >> r;
         ifs >> g;
         ifs >> b;
-        shared_arr[shift + i * 3] = char(r);
-        shared_arr[shift + i * 3 + 1] = char(g);
-        shared_arr[shift + i * 3 + 2] = char(b);
+        shared_arr[img_shift + i * 3] = char(r);
+        shared_arr[img_shift + i * 3 + 1] = char(g);
+        shared_arr[img_shift + i * 3 + 2] = char(b);
     }
 
     ifs.close();
@@ -53,8 +58,10 @@ const char* STORAGE_ID = "/SHM_IMG_PROCESSOR";
 // Assumes metadata + image + response fit into 100kb.
 const int STORAGE_SIZE = 100000;
 
-// Address shift for storing the image (after metadata)
-const int IMG_SHIFT = 2;
+// Address shift for storing image metadata (after sync metadata)
+const int IMG_META_SHIFT = 2;
+// Address shift for storing the image itself (after metadata)
+const int IMG_SHIFT = 4;
 
 const int INPUT = 0;
 const int OUTPUT = 1;
@@ -100,7 +107,7 @@ int main(int argc, char *argv[])
     // Let's process 10 images.
     for (int i = 0; i < 10; i++) {
         std::string filename = "imgs/img" + std::to_string(i) + ".ppm";
-        bool read = read_ppm_to_shared_memory(filename, addr, IMG_SHIFT);
+        bool read = read_ppm_to_shared_memory(filename, addr, IMG_META_SHIFT);
         if (!read) {
             std::cerr << "Skipping " << filename << std::endl;
             continue;
@@ -115,9 +122,14 @@ int main(int argc, char *argv[])
         addr[OUTPUT] = REQUIRED; // set 0 0
 
         // read result
-        int rows = 100;
-        int col = 200;
-        int answer_addr = IMG_SHIFT + 3 * rows * col;
+        uint8_t rows_ch = addr[IMG_META_SHIFT];
+        uint8_t columns_ch = addr[IMG_META_SHIFT + 1];
+        int rows = int(rows_ch);
+        int columns = int(columns_ch);
+        
+        std::cout << "dimensions " << int(rows) << " " << int(columns) << std::endl;
+        
+        int answer_addr = IMG_SHIFT + 3 * rows * columns;
 
         std::cout << "img = " << i << std::endl;
         for (int i = 0; i < rows; i++) {
