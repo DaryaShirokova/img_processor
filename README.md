@@ -10,7 +10,8 @@ Pre-requisites (locations to download provided for mac OS)
 To run:
 1. Open two terminal windows, go to `cd processor_rust` in the first and `cd img_provider_cpp` in the second.
 1. Build processor_rust from processor_rust terminal: `cargo build`.
-1. Build img_provider_cpp from img_provider_cpp terminal: `main.cc -o build/image_provider.out`.
+1. Create build dir from img_provider_cpp: `mkdir build`.
+1. Build img_provider_cpp from img_provider_cpp terminal: `clang++ main.cc -o build/image_provider.out`.
 1. Run processor_rust from processor_rust terminal (it must be launched first as it initializes the shared memory):  `cargo run`.
 1. Run img_provider_cpp: `./build/image_provider.out`.
 
