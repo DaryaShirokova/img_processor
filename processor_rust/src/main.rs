@@ -10,16 +10,15 @@ use std::{ptr, thread, time};
 const STORAGE_ID: *const c_char = b"/SHM_IMG_PROCESSOR\0".as_ptr() as *const c_char;
 const STORAGE_SIZE: size_t = 100000; // 100kb
 
-// first 2 addresses reserved for metadata, followed by image rows and cols
-const IMG_METADATA_SHIFT: usize = 2;
-const IMG_SHIFT: usize = 4;
+// first address is reserved for sync metadata, followed by image rows and cols
+const IMG_METADATA_SHIFT: usize = 1;
+const IMG_SHIFT: usize = IMG_METADATA_SHIFT + 2;
 
 // shared metadata for synchronization
-const INPUT: usize = 0;
-const OUTPUT: usize = 1;
-
-const REQUIRED: i8 = 0;
-const READY: i8 = 1;
+const INRERMEDIATE: i8 = 0;
+const OUTPUT_READY: i8 = 1;
+const INPUT_READY: i8 = 2;
+const NO_MORE_INPUT: i8 = 3;
 
 fn most_popular_colour(
     sh_addr: *const c_char,
@@ -32,9 +31,9 @@ fn most_popular_colour(
     while col < columns {
         let index: usize = row_addr + col * 3;
         unsafe {
-            let r = *sh_addr.add(index);
-            let g = *sh_addr.add(index + 1);
-            let b = *sh_addr.add(index + 2);
+            let r = ptr::read_volatile(sh_addr.add(index));
+            let g = ptr::read_volatile(sh_addr.add(index + 1));
+            let b = ptr::read_volatile(sh_addr.add(index + 2));
             *colours.entry((r, g, b)).or_insert(0) += 1;
         }
         col += 1;
@@ -49,9 +48,9 @@ fn most_popular_colour(
 fn calculate_colours(sh_addr: *mut c_char) {
     // read image dimensions
     let (rows, columns) = unsafe {
-        let rows = *sh_addr.add(IMG_METADATA_SHIFT) as u8;
-        let columns = *sh_addr.add(IMG_METADATA_SHIFT + 1) as u8;
-        (rows as usize, columns  as usize)
+        let rows = ptr::read_volatile(sh_addr.add(IMG_METADATA_SHIFT)) as u8;
+        let columns = ptr::read_volatile(sh_addr.add(IMG_METADATA_SHIFT + 1)) as u8;
+        (rows as usize, columns as usize)
     };
 
     // put asnswer after the metadata and image data
@@ -67,9 +66,9 @@ fn calculate_colours(sh_addr: *mut c_char) {
         );
 
         unsafe {
-            *sh_addr.add(answer_addr + 3 * i) = colour.0 as c_char;
-            *sh_addr.add(answer_addr + 3 * i + 1) = colour.1 as c_char;
-            *sh_addr.add(answer_addr + 3 * i + 2) = colour.2 as c_char;
+            ptr::write_volatile(sh_addr.add(answer_addr + 3 * i), colour.0 as c_char);
+            ptr::write_volatile(sh_addr.add(answer_addr + 3 * i + 1), colour.1 as c_char);
+            ptr::write_volatile(sh_addr.add(answer_addr + 3 * i + 2), colour.2 as c_char);
         }
         i += 1;
     }
@@ -99,38 +98,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         (fd, shared_addr as *mut c_char)
     };
 
-    // First two addresses (char) are reserved to synchronize the processes.
-    // addr[0] is input data (0 = required, 1 = ready), addr[1] is output data (0 = required, 1 = ready)
+    // First char (last two bits) is reserved to synchronize the processes.
     // requestor == image provider (c++ application), processor = img processor (this application)
-    // When image processor starts (it must start first otherwise memory is not initialized), address is 0 0. It sets it to 0 1 initially.
-    // * if requestor sees 0 1, it takes control, reads output (if it requested them before), sets to 0 0, writes image to shared memory and sets to 1 0
-    // * if processor sees 1 0, it reads input data, sets to 0 0, calculates output, sets to 0 1.
-    // * if processor sees 1 1, no more data expected, processor sets data to 0 0 and ends the process.
-
-
-
+    // When image processor starts (it must start first otherwise memory is not initialized), address is INTERMEDIATE. It sets it to OUTPUT_READY initially.
+    // * if requestor sees OUTPUT_READY, it takes control, reads output (if it requested it before), sets to INTERMEDIATE, writes image to shared memory and sets to INPUT_READY
+    // * if processor sees INPUT_READY, it reads input data, sets to INTERMEDIATE, calculates output, sets to OUTPUT_READY.
+    // * if processor sees NO_MORE_INPUT, no more data expected, processor sets data to INTERMEDIATE and ends the process.
     unsafe {
-        // set initial state to 0 1 (as no one requested input, no one reads it)
-        *sh_addr.add(INPUT) = REQUIRED;
-        *sh_addr.add(OUTPUT) = READY;
+        // set initial state to OUTPUT_READY (as no one requested input, no one reads it)
+        ptr::write_volatile(sh_addr, OUTPUT_READY);
     }
 
     loop {
         thread::sleep(time::Duration::from_nanos(100));
 
         unsafe {
-            if *sh_addr.add(INPUT) == READY && *sh_addr.add(OUTPUT) == REQUIRED {
-                // wait for 1 0 to start processing
-                *sh_addr = REQUIRED; // set 0 0
+            // wait for INPUT_READY to start processing
+            if ptr::read_volatile(sh_addr) == INPUT_READY {
+                ptr::write_volatile(sh_addr, INRERMEDIATE);
 
                 // process image
                 calculate_colours(sh_addr);
 
-                *sh_addr.add(OUTPUT) = READY;
+                ptr::write_volatile(sh_addr, OUTPUT_READY);
             }
 
-            if *sh_addr.add(INPUT) == READY && *sh_addr.add(OUTPUT) == READY {
-                // 1 1 - terminate process
+            if ptr::read_volatile(sh_addr) == NO_MORE_INPUT {
+                // NO_MORE_INPUT - terminate process
+                ptr::write_volatile(sh_addr, INRERMEDIATE);
                 break;
             }
         }

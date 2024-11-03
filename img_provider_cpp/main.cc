@@ -5,7 +5,24 @@
 #include <chrono>
 #include <thread>
 
-bool read_ppm_to_shared_memory(const std::string& filename, char* shared_arr, int shift) {
+// Name of the storage that processes images.
+const char* STORAGE_ID = "/SHM_IMG_PROCESSOR";
+// Assumes metadata + image + response fit into 100kb.
+const int STORAGE_SIZE = 100000;
+
+// Address shift for storing image metadata (after sync metadata)
+const int IMG_META_SHIFT = 1;
+// Address shift for storing the image itself (after metadata)
+const int IMG_SHIFT = IMG_META_SHIFT + 2;
+
+// Synchronizations states
+const uint8_t INTERMEDIATE = 0;
+const uint8_t OUTPUT_READY = 1;
+const uint8_t INPUT_READY = 2;
+const uint8_t NO_MORE_INPUT = 3;
+
+
+bool read_ppm_to_shared_memory(const std::string& filename, volatile char* shared_arr, int shift) {
     std::ifstream ifs(filename);
     if (!ifs) {
         std::cerr << "Can't open file " << filename << std::endl;
@@ -50,25 +67,6 @@ bool read_ppm_to_shared_memory(const std::string& filename, char* shared_arr, in
     return true;
 }
 
-
-
-
-// Name of the storage that processes images.
-const char* STORAGE_ID = "/SHM_IMG_PROCESSOR";
-// Assumes metadata + image + response fit into 100kb.
-const int STORAGE_SIZE = 100000;
-
-// Address shift for storing image metadata (after sync metadata)
-const int IMG_META_SHIFT = 2;
-// Address shift for storing the image itself (after metadata)
-const int IMG_SHIFT = 4;
-
-const int INPUT = 0;
-const int OUTPUT = 1;
-
-const int REQUIRED = 0;
-const int READY = 1;
-
 int main(int argc, char *argv[])
 {
 
@@ -84,46 +82,42 @@ int main(int argc, char *argv[])
     // No need to ftruncate as image processor initializes its shared memory.
     
     // mmap to shared memory.
-    char* addr = (char*)mmap(NULL, STORAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    volatile char* sh_addr = (char*)mmap(NULL, STORAGE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-
-
-    // First two addresses (char) are reserved to synchronize the processes.
-    // addr[0] is input data (0 = required, 1 = ready), addr[1] is output data (0 = required, 1 = ready)
+    // First char (last two bits) is reserved to synchronize the processes.
     // requestor == image provider (this application), processor = img processor (rust application)
-    // When image processor starts (it must start first otherwise memory is not initialized), address is 0 0. It sets it to 0 1 initially.
-    // * if requestor sees 0 1, it takes control, reads output (if it requested them before), sets to 0 0, writes image to shared memory and sets to 1 0
-    // * if processor sees 1 0, it reads input data, sets to 0 0, calculates output, sets to 0 1.
-    // * if processor sees 1 1, no more data expected, processor sets data to 0 0 and ends the process.
+    // When image processor starts (it must start first otherwise memory is not initialized), address is INTERMEDIATE. It sets it to OUTPUT_READY initially.
+    // * if requestor sees OUTPUT_READY, it takes control, reads output (if it requested it before), sets to INTERMEDIATE, writes image to shared memory and sets to INPUT_READY
+    // * if processor sees INPUT_READY, it reads input data, sets to INTERMEDIATE, calculates output, sets to OUTPUT_READY.
+    // * if processor sees NO_MORE_INPUT, no more data expected, processor sets data to INTERMEDIATE and ends the process.
     
     // Wait until image processor is ready.
-    while (addr[INPUT] != REQUIRED || addr[OUTPUT] != READY) { // wait for 0 1
+    while (sh_addr[0] != OUTPUT_READY) {
         std::this_thread::sleep_for(std::chrono::nanoseconds(100));
     }
 
-    addr[OUTPUT] = REQUIRED; // set 0 0
-
+    sh_addr[0] = INTERMEDIATE;
 
     // Let's process 10 images.
     for (int i = 0; i < 10; i++) {
         std::string filename = "imgs/img" + std::to_string(i) + ".ppm";
-        bool read = read_ppm_to_shared_memory(filename, addr, IMG_META_SHIFT);
+        bool read = read_ppm_to_shared_memory(filename, sh_addr, IMG_META_SHIFT);
         if (!read) {
             std::cerr << "Skipping " << filename << std::endl;
             continue;
         }
         
-        addr[INPUT] = READY; // 1 0, img processor can take over
+        sh_addr[0] = INPUT_READY; // img processor can take over
 
-        while (addr[INPUT] != REQUIRED || addr[OUTPUT] != READY) { // wait for 0 1 - result ready
+        while (sh_addr[0] != OUTPUT_READY) {
             std::this_thread::sleep_for(std::chrono::nanoseconds(100));
         }
 
-        addr[OUTPUT] = REQUIRED; // set 0 0
+        sh_addr[0] = INTERMEDIATE;
 
         // read result
-        uint8_t rows_ch = addr[IMG_META_SHIFT];
-        uint8_t columns_ch = addr[IMG_META_SHIFT + 1];
+        uint8_t rows_ch = sh_addr[IMG_META_SHIFT];
+        uint8_t columns_ch = sh_addr[IMG_META_SHIFT + 1];
         int rows = int(rows_ch);
         int columns = int(columns_ch);
         
@@ -133,17 +127,15 @@ int main(int argc, char *argv[])
 
         std::cout << "img = " << i << std::endl;
         for (int i = 0; i < rows; i++) {
-            uint8_t r = addr[answer_addr + 3 * i];
-            uint8_t g = addr[answer_addr + 3 * i + 1];
-            uint8_t b = addr[answer_addr + 3 * i + 2];
+            uint8_t r = sh_addr[answer_addr + 3 * i];
+            uint8_t g = sh_addr[answer_addr + 3 * i + 1];
+            uint8_t b = sh_addr[answer_addr + 3 * i + 2];
             std::cout << "r" << +i << "= (" << +r << " " << +g << " "  << +b << "); ";
         }
         std::cout << std::endl;
     }
 
-    // no more input expected
-    addr[OUTPUT] = 1; // 0 1
-    addr[INPUT] = 1; //  1 1
+    sh_addr[0] = NO_MORE_INPUT;
 
     return 0;
 }
