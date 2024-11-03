@@ -130,7 +130,7 @@ int main(int argc, char *argv[])
             uint8_t r = sh_addr[answer_addr + 3 * i];
             uint8_t g = sh_addr[answer_addr + 3 * i + 1];
             uint8_t b = sh_addr[answer_addr + 3 * i + 2];
-            std::cout << "r" << +i << "= (" << +r << " " << +g << " "  << +b << "); ";
+            std::cout << "r" << i << "= (" << +r << " " << +g << " "  << +b << "); ";
         }
         std::cout << std::endl;
     }
