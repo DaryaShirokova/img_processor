@@ -8,7 +8,7 @@ use std::error::Error;
 use std::{ptr, thread, time};
 
 const STORAGE_ID: *const c_char = b"/SHM_IMG_PROCESSOR\0".as_ptr() as *const c_char;
-const STORAGE_SIZE: size_t = 100000; // 100kb
+const STORAGE_SIZE: size_t = 100000; // 100 kilobytes
 
 // first address is reserved for sync metadata, followed by image rows and cols
 const IMG_METADATA_SHIFT: usize = 1;
@@ -19,6 +19,8 @@ const INRERMEDIATE: i8 = 0;
 const OUTPUT_READY: i8 = 1;
 const INPUT_READY: i8 = 2;
 const NO_MORE_INPUT: i8 = 3;
+
+const SLEEP_NANO: u64 = 100;
 
 fn most_popular_colour(
     sh_addr: *const c_char,
@@ -84,15 +86,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         if fd == -1 {
             return Err("shm_open failed".into());
         }
-
         let res = ftruncate(fd, STORAGE_SIZE as off_t);
         if res == -1 {
+            close(fd);
             return Err("ftruncate failed".into());
         }
 
         // mmap to shared memory.
         let shared_addr = mmap(ptr::null_mut(), STORAGE_SIZE, PROT_WRITE, MAP_SHARED, fd, 0);
         if shared_addr == MAP_FAILED {
+            shm_unlink(STORAGE_ID);
+            close(fd);
             return Err("mmap failed".into());
         }
         (fd, shared_addr as *mut c_char)
@@ -110,7 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     loop {
-        thread::sleep(time::Duration::from_nanos(100));
+        thread::sleep(time::Duration::from_nanos(SLEEP_NANO));
 
         unsafe {
             // wait for INPUT_READY to start processing

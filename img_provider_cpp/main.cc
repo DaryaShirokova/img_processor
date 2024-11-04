@@ -7,12 +7,12 @@
 
 // Name of the storage that processes images.
 const char* STORAGE_ID = "/SHM_IMG_PROCESSOR";
-// Assumes metadata + image + response fit into 100kb.
+// Assumes metadata + image + response fit into 100 kilobytes.
 const int STORAGE_SIZE = 100000;
 
 // Address shift for storing image metadata (after sync metadata)
 const int IMG_META_SHIFT = 1;
-// Address shift for storing the image itself (after metadata)
+// Address shift for storing the image itself (after rows/columns metadata)
 const int IMG_SHIFT = IMG_META_SHIFT + 2;
 
 // Synchronizations states
@@ -21,6 +21,7 @@ const uint8_t OUTPUT_READY = 1;
 const uint8_t INPUT_READY = 2;
 const uint8_t NO_MORE_INPUT = 3;
 
+const int SLEEP_NANO = 100;
 
 bool read_ppm_to_shared_memory(const std::string& filename, volatile char* shared_arr, int shift) {
     std::ifstream ifs(filename);
@@ -69,9 +70,7 @@ bool read_ppm_to_shared_memory(const std::string& filename, volatile char* share
 
 int main(int argc, char *argv[])
 {
-
-
-    // Producer (who sends images) assumes image processor has greated the memory segment,
+    // Producer (who sends images) assumes image processor has created the memory segment,
     // thus opening for read-write.
     int fd = shm_open(STORAGE_ID, O_RDWR, S_IRUSR | S_IWUSR);
     if (fd == -1)
@@ -93,7 +92,7 @@ int main(int argc, char *argv[])
     
     // Wait until image processor is ready.
     while (sh_addr[0] != OUTPUT_READY) {
-        std::this_thread::sleep_for(std::chrono::nanoseconds(100));
+        std::this_thread::sleep_for(std::chrono::nanoseconds(SLEEP_NANO));
     }
 
     sh_addr[0] = INTERMEDIATE;
@@ -110,7 +109,7 @@ int main(int argc, char *argv[])
         sh_addr[0] = INPUT_READY; // img processor can take over
 
         while (sh_addr[0] != OUTPUT_READY) {
-            std::this_thread::sleep_for(std::chrono::nanoseconds(100));
+            std::this_thread::sleep_for(std::chrono::nanoseconds(SLEEP_NANO));
         }
 
         sh_addr[0] = INTERMEDIATE;
@@ -121,7 +120,7 @@ int main(int argc, char *argv[])
         int rows = int(rows_ch);
         int columns = int(columns_ch);
         
-        std::cout << "dimensions " << int(rows) << " " << int(columns) << std::endl;
+        std::cout << "dimensions " << rows << " " << columns << std::endl;
         
         int answer_addr = IMG_SHIFT + 3 * rows * columns;
 
